@@ -6,9 +6,9 @@ using UnityEngine.Rendering.Universal;
 using UnityEngine.Rendering.Universal.Internal;
 using System.Reflection;
 using System;
-using static UnityEditor.Progress;
 using System.Runtime.InteropServices;
-using UnityEngine.Experimental.GlobalIllumination;
+using static URPInternalReferences;
+using Unity.Collections;
 
 // TODO:
 
@@ -58,6 +58,7 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
     ProfilingSampler m_ProfilingSamplerCopy = new ProfilingSampler("Buffer Copy");
     ProfilingSampler m_ProfilingSamplerHorizontal = new ProfilingSampler("Horizontal Blur Pass");
     ProfilingSampler m_ProfilingSamplerVertical = new ProfilingSampler("Vertical Blur Pass");
+    //ProfilingSampler m_ProfilingSamplerBlurPass = new ProfilingSampler("Blur Pass");
     AdditionalLightVSMRenderFeature.VSMParameters m_EVSMParameters;
 
 
@@ -71,6 +72,8 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
 
     ComputeBuffer FaceOffsetsBuffer;
 
+    MaterialPropertyBlock _BlitPropertyBlock = new MaterialPropertyBlock();
+    float nearClipZ;
 
     // Reflected shadow data
     private int lightCount;
@@ -88,6 +91,28 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
     private FieldInfo ShadowRTField;
     private FieldInfo AdditionalLightToVisibleLightField;
 
+    VertexAttributeDescriptor[] BlurMeshVertexLayout = new[]
+    {
+        new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
+        new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2),
+        new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.SInt32, 4),
+    };
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct BlurMeshVertex
+    {
+        public Vector3 pos;
+        public Vector2 uv;
+        public Vector2Int xy, zw;
+
+        public BlurMeshVertex(Vector3 position, Vector2 texcoord, Vector2Int Bounds_XY, Vector2Int Bounds_ZW)
+        {
+            pos = position;
+            uv = texcoord;
+            xy = Bounds_XY;
+            zw = Bounds_ZW;
+        }
+    }
 
     public AdditionalVSMRenderPass(Shader bufferCopyShader, ComputeShader cubemapBlurX, ComputeShader cubemapBlurY, ref AdditionalLightVSMRenderFeature.VSMParameters parameters)
     {
@@ -98,6 +123,11 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
         renderPassEvent = RenderPassEvent.AfterRenderingShadows;
 
         m_EVSMParameters = parameters;
+
+        // Blitting Related
+        nearClipZ = -1;
+        if (SystemInfo.usesReversedZBuffer)
+            nearClipZ = 1;
     } 
 
     // Consider moving to configure
@@ -146,6 +176,9 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
         
         CommandBuffer cmd = CommandBufferPool.Get("Variance Shadow Mapping");
         cmd.Clear();
+
+        CoreUtils.SetRenderTarget(cmd, ShadowMapBackBuffer);
+        CoreUtils.ClearRenderTarget(cmd, ClearFlag.Color, Color.black);
          
         using (new ProfilingScope(cmd, m_ProfilingSamplerCopy))
         {
@@ -268,7 +301,88 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
                 }
             }
         }
-        //Debug.Log("Cubemap Dispatches: " + CubemapDispatchCount);
+        //using (new ProfilingScope(cmd, m_ProfilingSamplerBlurPass))
+        //{
+        //    // Data for blur mesh
+        //    //List<Vector3> Verticies = new List<Vector3>();
+        //    //List<Vector2> UV = new List<Vector2>();
+        //    List<BlurMeshVertex> Verticies = new List<BlurMeshVertex>();
+        //    List<int> Indices = new List<int>();
+
+
+        //    // Collect list of shadowed lights
+        //    List<Vector2Int> shadowedPointLightIndicies = new List<Vector2Int>(); // x is visible light index, y is first shadow slice index
+        //    List<int> shadowedSpotLightIndicies = new List<int>(); // maps to shadow slice
+        //    for (int i = 0; i < sliceCount; i++)
+        //    {
+        //        int additionalLightIndex = ShadowSliceToAdditionalLight[i];
+        //        if (AdditionalLightParms[additionalLightIndex].z == 1)
+        //        {
+        //            int cubeFace = i - (int)AdditionalLightParms[ShadowSliceToAdditionalLight[i]].w;
+        //            if (cubeFace == 0)
+        //            {
+        //                //It's a point light
+        //                shadowedPointLightIndicies.Add(new Vector2Int(AdditionalLightIndexToVisibleLightIndex[additionalLightIndex], i));
+        //            }
+
+        //        }
+        //        else
+        //        {
+        //            // It's a spotlight
+        //            shadowedSpotLightIndicies.Add(i);
+        //        }
+        //    }
+
+
+        //    // Generate blur quads
+        //    Rect ShadowmapRect = new Rect(0, 0, VarianceShadowMap.rt.width, VarianceShadowMap.rt.height);
+        //    for (int i = 0; i < shadowedPointLightIndicies.Count; i++)
+        //    {
+        //        VisibleLight PointLight = renderingData.lightData.visibleLights[shadowedPointLightIndicies[i].x];
+        //        int firstSliceIndex = shadowedPointLightIndicies[i].y;
+        //        int sliceResolution = ShadowSlices[firstSliceIndex].resolution;
+
+
+        //        // Pretty accurate 
+        //        int paddingPixelCount = GetPaddingPixelCount(PointLight, sliceResolution);
+        //        //Set face offsets in atlas
+        //        Vector2Int[] FaceOffsets = ComputeCubemapFaceOffsets(firstSliceIndex);
+
+        //        for (int face = 0; face < 6; face++)
+        //        {
+        //            Vector2Int sliceOffset = FaceOffsets[face];
+
+        //            Rect innerFaceRect = new Rect(sliceOffset.x + m_EVSMParameters.BlurRadius, sliceOffset.y + m_EVSMParameters.BlurRadius, sliceResolution - (m_EVSMParameters.BlurRadius * 2), sliceResolution - (m_EVSMParameters.BlurRadius * 2));
+        //            Vector2Int HorizontalBounds = new Vector2Int(sliceOffset.x, sliceOffset.x + sliceResolution - 1);
+        //            Vector2Int VerticalBounds = new Vector2Int(sliceOffset.y, sliceOffset.y + sliceResolution - 1);
+
+        //            GenerateBlurQuad(innerFaceRect, ShadowmapRect, ref Verticies, ref Indices, HorizontalBounds, VerticalBounds);
+        //        }
+        //    }
+        //    for (int i = 0; i < shadowedSpotLightIndicies.Count; i++)
+        //    {
+        //        // Compute rect for current shadow slice
+        //        ShadowSliceData slice = ShadowSlices[shadowedSpotLightIndicies[i]];
+        //        Rect sliceRect = new Rect(slice.offsetX, slice.offsetY, slice.resolution, slice.resolution);
+
+        //        Vector2Int HorizontalBounds = new Vector2Int(slice.offsetX, slice.offsetX + slice.resolution - 1);
+        //        Vector2Int VerticalBounds = new Vector2Int(slice.offsetY, slice.offsetY + slice.resolution - 1);
+
+        //        GenerateBlurQuad(sliceRect, ShadowmapRect, ref Verticies, ref Indices, HorizontalBounds, VerticalBounds);
+        //    }
+
+
+        //    // Mesh Generation from data
+        //    Mesh blurPassMesh = new Mesh();
+        //    blurPassMesh.SetVertexBufferParams(Verticies.Count, BlurMeshVertexLayout);
+        //    blurPassMesh.SetVertexBufferData(Verticies, 0, 0, Verticies.Count);
+
+        //    blurPassMesh.SetIndices(Indices, MeshTopology.Triangles, 0);
+
+
+        //    BlitMeshToTarget(cmd, VarianceShadowMap, ShadowMapBackBuffer, blurPassMesh, _BufferMaterial, 1);
+        //    BlitMeshToTarget(cmd, ShadowMapBackBuffer, VarianceShadowMap, blurPassMesh, _BufferMaterial, 2);
+        //}
 
         context.ExecuteCommandBuffer(cmd);
         cmd.Clear();
@@ -327,6 +441,69 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
         Blitter.BlitTexture(cmd, source, new Vector4(viewport.width / source.rt.width, viewport.height / source.rt.height, viewport.x / source.rt.width, viewport.y / source.rt.height), material, pass);
     }
 
+    private void GenerateBlurQuad(Rect quadSize, Rect destinationSize, ref List<BlurMeshVertex> verticies, ref List<int> indicies, Vector2Int HorizontalBounds, Vector2Int VerticalBounds)
+    {
+        int startingVertex = verticies.Count;
+
+        // Verts
+        verticies.Add(new BlurMeshVertex( 
+            new Vector3(quadSize.x / destinationSize.width, quadSize.y / destinationSize.height, nearClipZ),       // 0, 0
+            new Vector2(quadSize.x / destinationSize.width, quadSize.y / destinationSize.height),
+            HorizontalBounds, VerticalBounds
+        ));
+        verticies.Add(new BlurMeshVertex(
+            new Vector3(quadSize.xMax / destinationSize.width, quadSize.y / destinationSize.height, nearClipZ),    // 1, 0
+            new Vector2(quadSize.xMax / destinationSize.width, quadSize.y / destinationSize.height),
+            HorizontalBounds, VerticalBounds
+        ));
+        verticies.Add(new BlurMeshVertex(
+            new Vector3(quadSize.x / destinationSize.width, quadSize.yMax / destinationSize.height, nearClipZ),    // 0, 1
+            new Vector2(quadSize.x / destinationSize.width, quadSize.yMax / destinationSize.height),
+            HorizontalBounds, VerticalBounds
+        ));
+        verticies.Add(new BlurMeshVertex(
+            new Vector3(quadSize.xMax / destinationSize.width, quadSize.yMax / destinationSize.height, nearClipZ), // 1, 1
+            new Vector2(quadSize.xMax / destinationSize.width, quadSize.yMax / destinationSize.height),
+            HorizontalBounds, VerticalBounds
+        ));
+
+
+        //verticies.Add(new Vector3(quadSize.x / destinationSize.width, quadSize.y / destinationSize.height, nearClipZ));       // 0, 0
+        //verticies.Add(new Vector3(quadSize.xMax / destinationSize.width, quadSize.y / destinationSize.height, nearClipZ));    // 1, 0
+        //verticies.Add(new Vector3(quadSize.x / destinationSize.width, quadSize.yMax / destinationSize.height, nearClipZ));    // 0, 1
+        //verticies.Add(new Vector3(quadSize.xMax / destinationSize.width, quadSize.yMax / destinationSize.height, nearClipZ)); // 1, 1
+
+        //// UVs
+        //uv.Add(new Vector2(0, 0));
+        //uv.Add(new Vector2(1, 0));
+        //uv.Add(new Vector2(0, 1));
+        //uv.Add(new Vector2(1, 1));
+
+
+        // Triangles
+
+        //Lower left triangle
+        indicies.Add(startingVertex + 0);
+        indicies.Add(startingVertex + 2);
+        indicies.Add(startingVertex + 1);
+
+        //Upper right triangle
+        indicies.Add(startingVertex + 2);
+        indicies.Add(startingVertex + 3);
+        indicies.Add(startingVertex + 1);
+    }
+
+    private void BlitMeshToTarget(CommandBuffer cmd, RTHandle source, RTHandle target, Mesh mesh, Material material, int pass)
+    {
+        _BlitPropertyBlock.SetTexture(URPInternalReferences.BlitShaderIDs._BlitTexture, source);
+        _BlitPropertyBlock.SetVector(BlitShaderIDs._BlitScaleBias, Vector2.one);
+
+        CoreUtils.SetRenderTarget(cmd, target);
+        CoreUtils.SetViewport(cmd, target);
+        //cmd.SetProjectionMatrix(Matrix4x4.Ortho(0, 1, 0, 1, -100, 100)); // Try without this at some point once it all works
+        cmd.DrawMesh(mesh, Matrix4x4.identity, material, 0, pass, _BlitPropertyBlock);
+    }
+    
 
     private Vector2[] ComputeCubemapFaceOffsets(int FirstSlice)
     {

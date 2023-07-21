@@ -95,7 +95,6 @@ void CubemapBlurX (uint3 id : SV_DispatchThreadID)
     float2 FaceOffset = _CubeSliceOffsets[face];
     float2 Accumulator = float2(0, 0);
 
-    
     float per_Texel = 1 / float(2 * _Radius + 1);
 
 
@@ -113,6 +112,7 @@ void CubemapBlurX (uint3 id : SV_DispatchThreadID)
     for (int x = 0; x < _Radius; x++) {
         Accumulator += _InputBuffer[uint2(x + _Radius, y) + FaceOffset];
         _OutputBuffer[uint2(x, y) + FaceOffset] = Accumulator * per_Texel;
+        //_OutputBuffer[uint2(x, y) + FaceOffset] = float2(0, 1);
         //_OutputBuffer[uint2(x, y) + FaceOffset] = TrailingFace((_Resolution - _Radius) + x, id);
         Accumulator -= _InputBuffer[TrailingFace((_Resolution - _Radius - (_FovPaddingPx * 2)) + x, id)];
     }
@@ -125,10 +125,18 @@ void CubemapBlurX (uint3 id : SV_DispatchThreadID)
         Accumulator -= _InputBuffer[uint2(x - _Radius, y) + FaceOffset];
     }
 
+    ////Accumulate before leading edge
+    //Accumulator = float2(0, 0);
+    //for (int x = _Resolution - (_Radius * 2); x < _Resolution; x++)
+    //{
+    //    Accumulator += _InputBuffer[uint2(x,y) + FaceOffset];
+    //}
+
     // Blur over into leading face
     for (int x = _Resolution - _Radius; x < _Resolution; x++) {
         Accumulator += _InputBuffer[LeadingFace((x + _Radius) - _Resolution + (_FovPaddingPx * 2), id)];
         _OutputBuffer[uint2(x, y) + FaceOffset] = Accumulator * per_Texel;
+        //_OutputBuffer[uint2(x, y) + FaceOffset] = float2(1,0);
         //_OutputBuffer[uint2(x, y) + FaceOffset] = _InputBuffer[LeadingFace((x + _Radius) - _Resolution, id)];
         Accumulator -= _InputBuffer[uint2(x - _Radius, y) + FaceOffset];
     }

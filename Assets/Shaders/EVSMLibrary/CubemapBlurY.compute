@@ -161,6 +161,13 @@ void CubemapBlurY (uint3 id : SV_DispatchThreadID)
         Accumulator -= _InputBuffer[uint2(x, y - _Radius) + FaceOffset];
     }
 
+    ////Accumulate before leading edge
+    //Accumulator = float2(0, 0);
+    //for (int y = _Resolution - (_Radius * 2); y < _Resolution; y++)
+    //{
+    //    Accumulator += _InputBuffer[uint2(x, y) + FaceOffset];
+    //}
+
     // Blur over into leading face
     for (int y = _Resolution - _Radius; y < _Resolution; y++) {
         Accumulator += _InputBuffer[LeadingFace((y + _Radius) - _Resolution + (_FovPaddingPx * 2), id)];

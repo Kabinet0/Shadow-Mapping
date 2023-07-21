@@ -16,9 +16,11 @@ Shader "Hidden/EVSMShader"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             // The Blit.hlsl file provides the vertex shader (Vert),
             // input structure (Attributes) and output strucutre (Varyings)
-            #include "Packages/com.unity.render-pipelines.core/Runtime/Utilities/Blit.hlsl"
+            //#include "Packages/com.unity.render-pipelines.core/Runtime/Utilities/Blit.hlsl"
+            #include "Assets/Shaders/EVSMLibrary/MeshBlitUtils.hlsl" // Includes Blit.hlsl
 
-            #pragma vertex Vert
+            // Per shader pass vertex func now
+            //#pragma vertex Vert
             #pragma fragment frag
             
             //StructuredBuffer<float4> _AtlasSplitData;
@@ -30,8 +32,6 @@ Shader "Hidden/EVSMShader"
             // TODO: Move to int4, but later
             int _LowBounds;
             int _UpBounds;
-            int _CubeOversampleUp;
-            int _CubeOversampleLow;
 
 
 
@@ -44,6 +44,8 @@ Shader "Hidden/EVSMShader"
             Name "Copy Texture"
 
             HLSLPROGRAM
+
+            #pragma vertex Vert
 
             // Optimize or something
             float2 frag (Varyings i) : SV_Target
@@ -78,6 +80,8 @@ Shader "Hidden/EVSMShader"
 
             HLSLPROGRAM 
 
+            #pragma vertex Vert
+
             float2 frag(Varyings i) : SV_Target
             {
                 int upBoundD = _UpBounds - i.positionCS.x;
@@ -96,12 +100,13 @@ Shader "Hidden/EVSMShader"
                 for (int x = 0; x < samples; x++) {
                     float2 offset = float2((x - _BlurRadius) * sign(distVal), 0);
 
-                    sum += SAMPLE_TEXTURE2D_LOD(_BlitTexture, sampler_PointClamp, i.texcoord + offset * texelSize, 0);
+                    sum += SAMPLE_TEXTURE2D_LOD(_BlitTexture, sampler_PointClamp, i.texcoord + offset * texelSize, 0).xy;
                 }
 
                 //return float2(_UpBounds,0);
 
                 return sum / samples;
+                //return float2(i.sliceBounds.y)
                 //return sign(distVal);
             }
 
@@ -113,6 +118,8 @@ Shader "Hidden/EVSMShader"
             Name "Vertical Blur"
 
             HLSLPROGRAM
+
+            #pragma vertex Vert
 
             float2 frag(Varyings i) : SV_Target
             {
@@ -133,7 +140,7 @@ Shader "Hidden/EVSMShader"
                 for (int y = 0; y < samples; y++) {
                     float2 offset = float2(0, (y - _BlurRadius) * sign(distVal));
 
-                    sum += SAMPLE_TEXTURE2D_LOD(_BlitTexture, sampler_PointClamp, i.texcoord + offset * texelSize, 0);
+                    sum += SAMPLE_TEXTURE2D_LOD(_BlitTexture, sampler_PointClamp, i.texcoord + offset * texelSize, 0).xy;
                 }
 
                 return sum/samples;
@@ -145,63 +152,15 @@ Shader "Hidden/EVSMShader"
 
         Pass
         {
-            Name "Vertical Cubemap Blur"
-
-            HLSLPROGRAM
-
-
-            float computeCubemapOffset(float coordinateIN) {
-                
-                float coordinateOUT = coordinateIN;
-
-                // if coord > upBound, compute overbound as coord - upBound
-                // Add overbound to _CubeOversampleUp
-                if (coordinateIN > _UpBounds) {
-                    coordinateOUT = _CubeOversampleUp + (coordinateIN - _UpBounds);
-                }
-                // if coord < lowBound, compute overbound as lowBound - coord
-                // Subtract overbound from _CubeOversampleLow
-                if (coordinateIN < _LowBounds) {
-                    coordinateOUT = _CubeOversampleLow - (_LowBounds - coordinateIN);
-                }
-
-                return coordinateOUT;
-            }
-
-            float2 frag(Varyings i) : SV_Target
-            {
-                // Compute samples count
-                int samples = 2 * _BlurRadius + 1;
-
-                float2 texelSize = _BlitTexture_TexelSize.xy;
-                half2 sum = 0;
-
-                for (int y = 0; y < samples; y++) {
-                    //  Rework to avoid dividing by texelSize or something
-                    float2 coord = (i.texcoord / texelSize) + float2(0, (y - _BlurRadius));
-                    
-                    coord.y = computeCubemapOffset(coord.y);
-
-                    sum += SAMPLE_TEXTURE2D_LOD(_BlitTexture, sampler_PointClamp, coord * texelSize, 0);
-                }
-
-                return sum / samples;
-                
-                //return i.texcoord;
-            }
-
-            ENDHLSL
-        }
-
-        Pass
-        {
             Name "Test Pass"
 
             HLSLPROGRAM
 
-            float2 frag(Varyings i) : SV_Target
+            #pragma vertex MeshVert
+
+            float2 frag(MeshVaryings i) : SV_Target
             {
-                return float2(0, 0);
+                return i.sliceBounds;
             }
 
             ENDHLSL
