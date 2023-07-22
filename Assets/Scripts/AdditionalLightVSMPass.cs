@@ -58,7 +58,7 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
     ProfilingSampler m_ProfilingSamplerCopy = new ProfilingSampler("Buffer Copy");
     ProfilingSampler m_ProfilingSamplerHorizontal = new ProfilingSampler("Horizontal Blur Pass");
     ProfilingSampler m_ProfilingSamplerVertical = new ProfilingSampler("Vertical Blur Pass");
-    //ProfilingSampler m_ProfilingSamplerBlurPass = new ProfilingSampler("Blur Pass");
+    ProfilingSampler m_ProfilingSamplerBlurPass = new ProfilingSampler("Blur Pass");
     AdditionalLightVSMRenderFeature.VSMParameters m_EVSMParameters;
 
 
@@ -189,200 +189,116 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
             _BufferMaterial.SetInteger("_BlurRadius", m_EVSMParameters.BlurRadius);
         }
 
-        // Burn this entire logic to the ground
-        // Do it better next time
-        using (new ProfilingScope(cmd, m_ProfilingSamplerHorizontal))
+
+        using (new ProfilingScope(cmd, m_ProfilingSamplerBlurPass))
         {
-            // Blur each shadow slice horizontally
+            // Data for blur mesh
+            //List<Vector3> Verticies = new List<Vector3>();
+            //List<Vector2> UV = new List<Vector2>();
+            List<BlurMeshVertex> Verticies = new List<BlurMeshVertex>();
+            List<int> Indices = new List<int>();
+
+
+            // Collect list of shadowed lights
+            List<Vector2Int> shadowedPointLightIndicies = new List<Vector2Int>(); // x is visible light index, y is first shadow slice index
+            List<int> shadowedSpotLightIndicies = new List<int>(); // maps to shadow slice
             for (int i = 0; i < sliceCount; i++)
             {
-                if (AdditionalLightParms[ShadowSliceToAdditionalLight[i]].z == 1)
-                {
+                int additionalLightIndex = ShadowSliceToAdditionalLight[i];
+
+                if (AdditionalLightParms[additionalLightIndex].z == 1) {
+
                     int cubeFace = i - (int)AdditionalLightParms[ShadowSliceToAdditionalLight[i]].w;
-                    if (cubeFace == 0)
-                    {
-                        VisibleLight PointLight = renderingData.lightData.visibleLights[AdditionalLightIndexToVisibleLightIndex[ShadowSliceToAdditionalLight[i]]];
-
-                        int firstSliceIndex = (int)AdditionalLightParms[ShadowSliceToAdditionalLight[i]].w;
-                        int sliceResolution = ShadowSlices[firstSliceIndex].resolution;
-
-                        // Pretty accurate 
-                        int paddingPixelCount = GetPaddingPixelCount(PointLight, sliceResolution);
-
-                        //Get compute shader kernel handle
-                        //Cache it? It shouldn't change? Maybe use a const? Is this consistently 0?
-                        int kernelHandle = _CubemapBlurX.FindKernel("CubemapBlurX");
-
-                        //Set face offsets in atlas
-                        Vector2[] FaceOffsets = ComputeCubemapFaceOffsets(firstSliceIndex);
-                        cmd.SetBufferData(FaceOffsetsBuffer, FaceOffsets);
-
-                        // Set compute shader parameters
-                        cmd.SetComputeBufferParam(_CubemapBlurX, kernelHandle, "_CubeSliceOffsets", FaceOffsetsBuffer);
-
-                        cmd.SetComputeIntParam(_CubemapBlurX, "_FovPaddingPx", paddingPixelCount);
-                        cmd.SetComputeIntParam(_CubemapBlurX, "_Resolution", sliceResolution);
-                        cmd.SetComputeIntParam(_CubemapBlurX, "_Radius", m_EVSMParameters.BlurRadius);
-
-                        cmd.SetComputeTextureParam(_CubemapBlurX, kernelHandle, "_InputBuffer", VarianceShadowMap);
-                        cmd.SetComputeTextureParam(_CubemapBlurX, kernelHandle, "_OutputBuffer", ShadowMapBackBuffer);
-
-                        // Dispach compute shader for all six faces
-                        cmd.DispatchCompute(_CubemapBlurX, kernelHandle, 1, sliceResolution / 64, 6);
+                    if (cubeFace == 0) {
+                        //It's a point light
+                        shadowedPointLightIndicies.Add(new Vector2Int(AdditionalLightIndexToVisibleLightIndex[additionalLightIndex], i));
                     }
                 }
-                else
-                {
-                    // Compute rect for current shadow slice
-                    ShadowSliceData slice = ShadowSlices[i];
-                    Rect sliceRect = new Rect(slice.offsetX, slice.offsetY, slice.resolution, slice.resolution);
-
-                    cmd.SetGlobalInteger("_LowBounds", slice.offsetX);
-                    cmd.SetGlobalInteger("_UpBounds", slice.offsetX + slice.resolution);
-
-                    // Perform a horizontal box blur pass
-                    BlitShadowSlice(cmd, VarianceShadowMap, ShadowMapBackBuffer, sliceRect, _BufferMaterial, 1);
+                else {
+                    // It's a spotlight
+                    shadowedSpotLightIndicies.Add(i);
                 }
             }
-        }
 
-        // This code is horrifying
-        using (new ProfilingScope(cmd, m_ProfilingSamplerVertical))
-        {
-            // Blur each shadow slice vertically
-            for (int i = 0; i < sliceCount; i++)
+
+            
+            Rect ShadowmapRect = new Rect(0, 0, VarianceShadowMap.rt.width, VarianceShadowMap.rt.height);
+            // Dispatch compute shader for point lights
+            for (int i = 0; i < shadowedPointLightIndicies.Count; i++)
             {
-                if (AdditionalLightParms[ShadowSliceToAdditionalLight[i]].z == 1)
-                {
-                    int cubeFace = i - (int)AdditionalLightParms[ShadowSliceToAdditionalLight[i]].w;
-                    if (cubeFace == 0)
-                    {
-                        VisibleLight PointLight = renderingData.lightData.visibleLights[AdditionalLightIndexToVisibleLightIndex[ShadowSliceToAdditionalLight[i]]];
+                VisibleLight PointLight = renderingData.lightData.visibleLights[shadowedPointLightIndicies[i].x];
 
-                        int firstSliceIndex = (int)AdditionalLightParms[ShadowSliceToAdditionalLight[i]].w;
-                        int sliceResolution = ShadowSlices[firstSliceIndex].resolution;
+                int firstSliceIndex = (int)AdditionalLightParms[ShadowSliceToAdditionalLight[shadowedPointLightIndicies[i].y]].w;
+                int sliceResolution = ShadowSlices[firstSliceIndex].resolution;
 
-                        // Pretty accurate 
-                        int paddingPixelCount = GetPaddingPixelCount(PointLight, sliceResolution);
+                // Pretty accurate 
+                int paddingPixelCount = GetPaddingPixelCount(PointLight, sliceResolution);
 
-                        //Get compute shader kernel handle
-                        //Cache it? It shouldn't change? Maybe use a const? Is this consistently 0?
-                        int kernelHandle = _CubemapBlurY.FindKernel("CubemapBlurY");
+                //Get compute shader kernel handle
+                //Cache it? It shouldn't change? Maybe use a const? Is this consistently 0?
+                int kernelHandleX = _CubemapBlurX.FindKernel("CubemapBlurX");
+                int kernelHandleY = _CubemapBlurY.FindKernel("CubemapBlurY");
 
-                        //Set face offsets in atlas
-                        Vector2[] FaceOffsets = ComputeCubemapFaceOffsets(firstSliceIndex);
-                        cmd.SetBufferData(FaceOffsetsBuffer, FaceOffsets);
+                //Set face offsets in atlas
+                Vector2[] FaceOffsets = ComputeCubemapFaceOffsets(firstSliceIndex);
+                cmd.SetBufferData(FaceOffsetsBuffer, FaceOffsets);
 
-                        // Set compute shader parameters
-                        cmd.SetComputeBufferParam(_CubemapBlurY, kernelHandle, "_CubeSliceOffsets", FaceOffsetsBuffer);
 
-                        cmd.SetComputeIntParam(_CubemapBlurY, "_FovPaddingPx", paddingPixelCount);
-                        cmd.SetComputeIntParam(_CubemapBlurY, "_Resolution", sliceResolution);
-                        cmd.SetComputeIntParam(_CubemapBlurY, "_Radius", m_EVSMParameters.BlurRadius);
+                /* Set Compute Shader Parameters */
 
-                        cmd.SetComputeTextureParam(_CubemapBlurY, kernelHandle, "_InputBuffer", ShadowMapBackBuffer);
-                        cmd.SetComputeTextureParam(_CubemapBlurY, kernelHandle, "_OutputBuffer", VarianceShadowMap);
+                // X blur params
+                cmd.SetComputeBufferParam(_CubemapBlurX, kernelHandleX, "_CubeSliceOffsets", FaceOffsetsBuffer);
 
-                        // Dispach compute shader for all six faces
-                        cmd.DispatchCompute(_CubemapBlurY, kernelHandle, sliceResolution / 64, 1, 6);
-                    }
-                }
-                else
-                {
-                    // Compute rect for current shadow slice
-                    ShadowSliceData slice = ShadowSlices[i];
-                    Rect sliceRect = new Rect(slice.offsetX, slice.offsetY, slice.resolution, slice.resolution);
+                cmd.SetComputeIntParam(_CubemapBlurX, "_FovPaddingPx", paddingPixelCount);
+                cmd.SetComputeIntParam(_CubemapBlurX, "_Resolution", sliceResolution);
+                cmd.SetComputeIntParam(_CubemapBlurX, "_Radius", m_EVSMParameters.BlurRadius);
 
-                    cmd.SetGlobalInteger("_LowBounds", slice.offsetY);
-                    cmd.SetGlobalInteger("_UpBounds", slice.offsetY + slice.resolution);
+                cmd.SetComputeTextureParam(_CubemapBlurX, kernelHandleX, "_InputBuffer", VarianceShadowMap);
+                cmd.SetComputeTextureParam(_CubemapBlurX, kernelHandleX, "_OutputBuffer", ShadowMapBackBuffer);
 
-                    // Perform a vertical box blur pass
-                    BlitShadowSlice(cmd, ShadowMapBackBuffer, VarianceShadowMap, sliceRect, _BufferMaterial, 2);
-                }
+                // Y blur params
+                cmd.SetComputeBufferParam(_CubemapBlurY, kernelHandleY, "_CubeSliceOffsets", FaceOffsetsBuffer);
+
+                cmd.SetComputeIntParam(_CubemapBlurY, "_FovPaddingPx", paddingPixelCount);
+                cmd.SetComputeIntParam(_CubemapBlurY, "_Resolution", sliceResolution);
+                cmd.SetComputeIntParam(_CubemapBlurY, "_Radius", m_EVSMParameters.BlurRadius);
+
+                cmd.SetComputeTextureParam(_CubemapBlurY, kernelHandleY, "_InputBuffer", ShadowMapBackBuffer);
+                cmd.SetComputeTextureParam(_CubemapBlurY, kernelHandleY, "_OutputBuffer", VarianceShadowMap);
+
+                /*     Dispatch Compute Shaders     */
+                /* Covers all six faces in one pass */
+
+                cmd.DispatchCompute(_CubemapBlurX, kernelHandleX, 1, sliceResolution / 64, 6); // X blur first
+                cmd.DispatchCompute(_CubemapBlurY, kernelHandleY, sliceResolution / 64, 1, 6); // Followed by Y blur
+
             }
+
+            // Generate blur quads for spotlights
+            for (int i = 0; i < shadowedSpotLightIndicies.Count; i++)
+            {
+                // Compute rect for current shadow slice
+                ShadowSliceData slice = ShadowSlices[shadowedSpotLightIndicies[i]];
+                Rect sliceRect = new Rect(slice.offsetX, slice.offsetY, slice.resolution, slice.resolution);
+
+                Vector2Int HorizontalBounds = new Vector2Int(slice.offsetX, slice.offsetX + slice.resolution - 1);
+                Vector2Int VerticalBounds = new Vector2Int(slice.offsetY, slice.offsetY + slice.resolution - 1);
+
+                GenerateBlurQuad(sliceRect, ShadowmapRect, ref Verticies, ref Indices, HorizontalBounds, VerticalBounds);
+            }
+
+
+            // Mesh Generation from quad data
+            Mesh blurPassMesh = new Mesh();
+            blurPassMesh.SetVertexBufferParams(Verticies.Count, BlurMeshVertexLayout);
+            blurPassMesh.SetVertexBufferData(Verticies, 0, 0, Verticies.Count);
+
+            blurPassMesh.SetIndices(Indices, MeshTopology.Triangles, 0);
+
+            // Blur the spotlights in one draw call
+            BlitMeshToTarget(cmd, VarianceShadowMap, ShadowMapBackBuffer, blurPassMesh, _BufferMaterial, 1);
+            BlitMeshToTarget(cmd, ShadowMapBackBuffer, VarianceShadowMap, blurPassMesh, _BufferMaterial, 2);
         }
-        //using (new ProfilingScope(cmd, m_ProfilingSamplerBlurPass))
-        //{
-        //    // Data for blur mesh
-        //    //List<Vector3> Verticies = new List<Vector3>();
-        //    //List<Vector2> UV = new List<Vector2>();
-        //    List<BlurMeshVertex> Verticies = new List<BlurMeshVertex>();
-        //    List<int> Indices = new List<int>();
-
-
-        //    // Collect list of shadowed lights
-        //    List<Vector2Int> shadowedPointLightIndicies = new List<Vector2Int>(); // x is visible light index, y is first shadow slice index
-        //    List<int> shadowedSpotLightIndicies = new List<int>(); // maps to shadow slice
-        //    for (int i = 0; i < sliceCount; i++)
-        //    {
-        //        int additionalLightIndex = ShadowSliceToAdditionalLight[i];
-        //        if (AdditionalLightParms[additionalLightIndex].z == 1)
-        //        {
-        //            int cubeFace = i - (int)AdditionalLightParms[ShadowSliceToAdditionalLight[i]].w;
-        //            if (cubeFace == 0)
-        //            {
-        //                //It's a point light
-        //                shadowedPointLightIndicies.Add(new Vector2Int(AdditionalLightIndexToVisibleLightIndex[additionalLightIndex], i));
-        //            }
-
-        //        }
-        //        else
-        //        {
-        //            // It's a spotlight
-        //            shadowedSpotLightIndicies.Add(i);
-        //        }
-        //    }
-
-
-        //    // Generate blur quads
-        //    Rect ShadowmapRect = new Rect(0, 0, VarianceShadowMap.rt.width, VarianceShadowMap.rt.height);
-        //    for (int i = 0; i < shadowedPointLightIndicies.Count; i++)
-        //    {
-        //        VisibleLight PointLight = renderingData.lightData.visibleLights[shadowedPointLightIndicies[i].x];
-        //        int firstSliceIndex = shadowedPointLightIndicies[i].y;
-        //        int sliceResolution = ShadowSlices[firstSliceIndex].resolution;
-
-
-        //        // Pretty accurate 
-        //        int paddingPixelCount = GetPaddingPixelCount(PointLight, sliceResolution);
-        //        //Set face offsets in atlas
-        //        Vector2Int[] FaceOffsets = ComputeCubemapFaceOffsets(firstSliceIndex);
-
-        //        for (int face = 0; face < 6; face++)
-        //        {
-        //            Vector2Int sliceOffset = FaceOffsets[face];
-
-        //            Rect innerFaceRect = new Rect(sliceOffset.x + m_EVSMParameters.BlurRadius, sliceOffset.y + m_EVSMParameters.BlurRadius, sliceResolution - (m_EVSMParameters.BlurRadius * 2), sliceResolution - (m_EVSMParameters.BlurRadius * 2));
-        //            Vector2Int HorizontalBounds = new Vector2Int(sliceOffset.x, sliceOffset.x + sliceResolution - 1);
-        //            Vector2Int VerticalBounds = new Vector2Int(sliceOffset.y, sliceOffset.y + sliceResolution - 1);
-
-        //            GenerateBlurQuad(innerFaceRect, ShadowmapRect, ref Verticies, ref Indices, HorizontalBounds, VerticalBounds);
-        //        }
-        //    }
-        //    for (int i = 0; i < shadowedSpotLightIndicies.Count; i++)
-        //    {
-        //        // Compute rect for current shadow slice
-        //        ShadowSliceData slice = ShadowSlices[shadowedSpotLightIndicies[i]];
-        //        Rect sliceRect = new Rect(slice.offsetX, slice.offsetY, slice.resolution, slice.resolution);
-
-        //        Vector2Int HorizontalBounds = new Vector2Int(slice.offsetX, slice.offsetX + slice.resolution - 1);
-        //        Vector2Int VerticalBounds = new Vector2Int(slice.offsetY, slice.offsetY + slice.resolution - 1);
-
-        //        GenerateBlurQuad(sliceRect, ShadowmapRect, ref Verticies, ref Indices, HorizontalBounds, VerticalBounds);
-        //    }
-
-
-        //    // Mesh Generation from data
-        //    Mesh blurPassMesh = new Mesh();
-        //    blurPassMesh.SetVertexBufferParams(Verticies.Count, BlurMeshVertexLayout);
-        //    blurPassMesh.SetVertexBufferData(Verticies, 0, 0, Verticies.Count);
-
-        //    blurPassMesh.SetIndices(Indices, MeshTopology.Triangles, 0);
-
-
-        //    BlitMeshToTarget(cmd, VarianceShadowMap, ShadowMapBackBuffer, blurPassMesh, _BufferMaterial, 1);
-        //    BlitMeshToTarget(cmd, ShadowMapBackBuffer, VarianceShadowMap, blurPassMesh, _BufferMaterial, 2);
-        //}
 
         context.ExecuteCommandBuffer(cmd);
         cmd.Clear();
@@ -446,7 +362,7 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
         int startingVertex = verticies.Count;
 
         // Verts
-        verticies.Add(new BlurMeshVertex( 
+        verticies.Add(new BlurMeshVertex(
             new Vector3(quadSize.x / destinationSize.width, quadSize.y / destinationSize.height, nearClipZ),       // 0, 0
             new Vector2(quadSize.x / destinationSize.width, quadSize.y / destinationSize.height),
             HorizontalBounds, VerticalBounds
@@ -466,18 +382,6 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
             new Vector2(quadSize.xMax / destinationSize.width, quadSize.yMax / destinationSize.height),
             HorizontalBounds, VerticalBounds
         ));
-
-
-        //verticies.Add(new Vector3(quadSize.x / destinationSize.width, quadSize.y / destinationSize.height, nearClipZ));       // 0, 0
-        //verticies.Add(new Vector3(quadSize.xMax / destinationSize.width, quadSize.y / destinationSize.height, nearClipZ));    // 1, 0
-        //verticies.Add(new Vector3(quadSize.x / destinationSize.width, quadSize.yMax / destinationSize.height, nearClipZ));    // 0, 1
-        //verticies.Add(new Vector3(quadSize.xMax / destinationSize.width, quadSize.yMax / destinationSize.height, nearClipZ)); // 1, 1
-
-        //// UVs
-        //uv.Add(new Vector2(0, 0));
-        //uv.Add(new Vector2(1, 0));
-        //uv.Add(new Vector2(0, 1));
-        //uv.Add(new Vector2(1, 1));
 
 
         // Triangles

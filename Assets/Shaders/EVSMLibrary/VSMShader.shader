@@ -80,12 +80,12 @@ Shader "Hidden/EVSMShader"
 
             HLSLPROGRAM 
 
-            #pragma vertex Vert
+            #pragma vertex MeshVert
 
-            float2 frag(Varyings i) : SV_Target
+            float2 frag(MeshVaryings i) : SV_Target
             {
-                int upBoundD = _UpBounds - i.positionCS.x;
-                int lowBoundD = _LowBounds - i.positionCS.x;
+                int upBoundD = i.sliceBounds.y - i.positionCS.x;
+                int lowBoundD = i.sliceBounds.x - i.positionCS.x;
 
                 int distVal = lerp(upBoundD, lowBoundD, step(abs(lowBoundD), abs(upBoundD)));
 
@@ -119,13 +119,13 @@ Shader "Hidden/EVSMShader"
 
             HLSLPROGRAM
 
-            #pragma vertex Vert
+            #pragma vertex MeshVert
 
-            float2 frag(Varyings i) : SV_Target
+            float2 frag(MeshVaryings i) : SV_Target
             {
                 // return SAMPLE_TEXTURE2D(_BlitTexture, sampler_PointClamp, i.texcoord);
-                int upBoundD = _UpBounds - i.positionCS.y;
-                int lowBoundD = _LowBounds - i.positionCS.y;
+                int upBoundD = i.sliceBounds.w - i.positionCS.y;
+                int lowBoundD = i.sliceBounds.z - i.positionCS.y;
 
                 int distVal = lerp(upBoundD, lowBoundD, step(abs(lowBoundD), abs(upBoundD)));
 
