@@ -10,14 +10,9 @@ SAMPLER(sampler_VarianceShadowMap);
 
 // Credit for my discovery of this function goes to Wicked Engine: https://github.com/turanszkij/WickedEngine/blob/master/WickedEngine/shaders/shadowHF.hlsli
 // This is used to clamp the uvs to last texel center to avoid sampling on the border and overfiltering into a different shadow
-float2 shadow_border_shrink(float2 shadow_coord)
-{
-    //float2 shadow_resolution = light.shadowAtlasMulAdd.xy * GetFrame().shadow_atlas_resolution;
-    //float border_size = 1.5;
-    //shadow_uv = clamp(shadow_uv * shadow_resolution, border_size, shadow_resolution - border_size) / shadow_resolution;
+//float2 shadow_border_shrink(float2 shadow_coord)
+// Turns out I don't need it. Wicked engine still seems neat tho
 
-    return shadow_coord;
-}
 
 
 // conversion helper for VSM flavors

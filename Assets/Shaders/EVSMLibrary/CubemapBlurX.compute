@@ -12,9 +12,8 @@ Texture2D<float2> _InputBuffer;
 RWTexture2D<float2> _OutputBuffer;
 
 StructuredBuffer<float2> _CubeSliceOffsets;
-//float2[6] _CubeSliceOffsets;
-int _Resolution;
-int _FovPaddingPx;
+StructuredBuffer<int2> _CubemapData; // X is resolution, Y is _FovPaddingPx
+
 int _Radius;
 
 #define POS_X 0
@@ -24,75 +23,94 @@ int _Radius;
 #define POS_Z 4
 #define NEG_Z 5
 
-uint2 LeadingFace(uint x, uint3 id) 
+uint2 LeadingFace(uint x, uint y, uint face, uint faceIndex, uint _Resolution)
 {
-    uint face = id.z;
-    uint y = id.y;
-
     switch (face) {
     case POS_X:
-        return uint2(x, y) + _CubeSliceOffsets[NEG_Z];
+        return uint2(x, y) + _CubeSliceOffsets[NEG_Z + faceIndex];
     case NEG_X:
         // Negative X
-        return uint2(x, y) + _CubeSliceOffsets[POS_Z];
+        return uint2(x, y) + _CubeSliceOffsets[POS_Z + faceIndex];
     case POS_Y:
         // Positive Y
-        return uint2(y, _Resolution - (x + 1)) + _CubeSliceOffsets[POS_X]; // Right for leading
+        return uint2(y, _Resolution - (x + 1)) + _CubeSliceOffsets[POS_X + faceIndex]; // Right for leading
     case NEG_Y:
         // Negative Y
-        return uint2(_Resolution - (y + 1), x) + _CubeSliceOffsets[POS_X]; // Right for leading
+        return uint2(_Resolution - (y + 1), x) + _CubeSliceOffsets[POS_X + faceIndex]; // Right for leading
     case POS_Z:
         // Positive Z
-        return uint2(x, y) + _CubeSliceOffsets[POS_X];
+        return uint2(x, y) + _CubeSliceOffsets[POS_X + faceIndex];
     case NEG_Z:
         // Negative Z
-        return uint2(x, y) + _CubeSliceOffsets[NEG_X];
+        return uint2(x, y) + _CubeSliceOffsets[NEG_X + faceIndex];
 
 
     default:
         // Negative Z
-        return uint2(x, y) + _CubeSliceOffsets[NEG_X];
+        return uint2(x, y) + _CubeSliceOffsets[NEG_X + faceIndex];
     }
 }
 
-int2 TrailingFace(uint x, uint3 id)
+int2 TrailingFace(uint x, uint y, uint face, uint faceIndex, uint _Resolution)
 {
-    uint face = id.z;
-    uint y = id.y;
-
     switch (face) {
     case POS_X:
-        return uint2(x, y) + _CubeSliceOffsets[POS_Z];
+        return uint2(x, y) + _CubeSliceOffsets[POS_Z + faceIndex];
     case NEG_X:
         // Negative X
-        return uint2(x, y) + _CubeSliceOffsets[NEG_Z];
+        return uint2(x, y) + _CubeSliceOffsets[NEG_Z + faceIndex];
     case POS_Y:
         // Positive Y
-        return uint2(_Resolution - (y + 1), x) + _CubeSliceOffsets[NEG_X]; // Right for trailing
+        return uint2(_Resolution - (y + 1), x) + _CubeSliceOffsets[NEG_X + faceIndex]; // Right for trailing
     case NEG_Y:
         // Negative Y
-        return uint2(y, _Resolution - (x + 1)) + _CubeSliceOffsets[NEG_X]; // Right for trailing
+        return uint2(y, _Resolution - (x + 1)) + _CubeSliceOffsets[NEG_X + faceIndex]; // Right for trailing
     case POS_Z:
         // Positive Z
-        return uint2(x, y) + _CubeSliceOffsets[NEG_X];
+        return uint2(x, y) + _CubeSliceOffsets[NEG_X + faceIndex];
     case NEG_Z:
         // Negative Z
-        return uint2(x, y) + _CubeSliceOffsets[POS_X];
+        return uint2(x, y) + _CubeSliceOffsets[POS_X + faceIndex];
 
 
 
     default:
         // Negative Z
-        return uint2(x, y) + _CubeSliceOffsets[POS_X];
+        return uint2(x, y) + _CubeSliceOffsets[POS_X + faceIndex];
     }
 }
 
 [numthreads(1,64,1)]
 void CubemapBlurX (uint3 id : SV_DispatchThreadID)
 {
+    int _Resolution;
+    int _FovPaddingPx;
+    uint _CubeIndex;
+
+    // Structured Buffer data
+    uint cubeCount, stride;
+    _CubemapData.GetDimensions(cubeCount, stride);
+
+    // Determine data for this rowID
+    uint RowIDSum = 0;
+    for (uint cubeID = 0; cubeID < cubeCount; cubeID++) {
+        RowIDSum += _CubemapData[cubeID].x;
+        if (id.y < RowIDSum) {
+            // Do stuff
+            _Resolution = _CubemapData[cubeID].x;
+            _FovPaddingPx = _CubemapData[cubeID].y;
+            _CubeIndex = cubeID;
+
+            break;
+        }
+    }
+
+
     uint face = id.z;
-    uint y = id.y;
-    float2 FaceOffset = _CubeSliceOffsets[face];
+    uint faceIndex = 6 * _CubeIndex;
+    uint y = id.y - (RowIDSum - _Resolution);
+
+    float2 FaceOffset = _CubeSliceOffsets[face + faceIndex];
     float2 Accumulator = float2(0, 0);
 
     float per_Texel = 1 / float(2 * _Radius + 1);
@@ -100,7 +118,7 @@ void CubemapBlurX (uint3 id : SV_DispatchThreadID)
 
     // Accumulate last part of trailing face
     for (int x = _Resolution - _Radius; x < _Resolution; x++) {
-        Accumulator += _InputBuffer[TrailingFace(x - (_FovPaddingPx * 2), id)];
+        Accumulator += _InputBuffer[TrailingFace(x - (_FovPaddingPx * 2), y, face, faceIndex, _Resolution)];
     }
 
     // Accumulate first part of current face
@@ -114,7 +132,7 @@ void CubemapBlurX (uint3 id : SV_DispatchThreadID)
         _OutputBuffer[uint2(x, y) + FaceOffset] = Accumulator * per_Texel;
         //_OutputBuffer[uint2(x, y) + FaceOffset] = float2(0, 1);
         //_OutputBuffer[uint2(x, y) + FaceOffset] = TrailingFace((_Resolution - _Radius) + x, id);
-        Accumulator -= _InputBuffer[TrailingFace((_Resolution - _Radius - (_FovPaddingPx * 2)) + x, id)];
+        Accumulator -= _InputBuffer[TrailingFace((_Resolution - _Radius - (_FovPaddingPx * 2)) + x, y, face, faceIndex, _Resolution)];
     }
 
     // Blur main part of face
@@ -125,25 +143,10 @@ void CubemapBlurX (uint3 id : SV_DispatchThreadID)
         Accumulator -= _InputBuffer[uint2(x - _Radius, y) + FaceOffset];
     }
 
-    ////Accumulate before leading edge
-    //Accumulator = float2(0, 0);
-    //for (int x = _Resolution - (_Radius * 2); x < _Resolution; x++)
-    //{
-    //    Accumulator += _InputBuffer[uint2(x,y) + FaceOffset];
-    //}
-
     // Blur over into leading face
     for (int x = _Resolution - _Radius; x < _Resolution; x++) {
-        Accumulator += _InputBuffer[LeadingFace((x + _Radius) - _Resolution + (_FovPaddingPx * 2), id)];
+        Accumulator += _InputBuffer[LeadingFace((x + _Radius) - _Resolution + (_FovPaddingPx * 2), y, face, faceIndex, _Resolution)];
         _OutputBuffer[uint2(x, y) + FaceOffset] = Accumulator * per_Texel;
-        //_OutputBuffer[uint2(x, y) + FaceOffset] = float2(1,0);
-        //_OutputBuffer[uint2(x, y) + FaceOffset] = _InputBuffer[LeadingFace((x + _Radius) - _Resolution, id)];
         Accumulator -= _InputBuffer[uint2(x - _Radius, y) + FaceOffset];
     }
-
-
-
-    //for (int x = _Resolution - _FovPaddingPx; x < _Resolution; x++) {
-    //    _OutputBuffer[uint2(x, y) + FaceOffset] = float2(0,0);
-    //}
 }
