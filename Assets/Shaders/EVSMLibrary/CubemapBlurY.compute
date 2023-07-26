@@ -1,5 +1,4 @@
 // Thanks: https://www.reddit.com/r/vulkan/comments/y6sz28/point_light_shadow_mapping_using_cube_maps/
-#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
 
 // Suppress annoying warning
 #pragma warning (disable : 3078)
@@ -16,8 +15,6 @@ StructuredBuffer<float2> _CubeSliceOffsets;
 StructuredBuffer<int2> _CubemapData; // X is resolution, Y is _FovPaddingPx
 
 int _Radius;
-
-#define COL_PER_THREAD 4
 
 #define POS_X 0
 #define NEG_X 1
@@ -95,113 +92,59 @@ void CubemapBlurY (uint3 id : SV_DispatchThreadID)
     uint cubeCount, stride;
     _CubemapData.GetDimensions(cubeCount, stride);
 
-    bool InUse = false;
-
     // Determine data for this rowID
     uint RowIDSum = 0;
     for (uint cubeID = 0; cubeID < cubeCount; cubeID++) {
-        RowIDSum += _CubemapData[cubeID].x / (uint)COL_PER_THREAD;
+        RowIDSum += _CubemapData[cubeID].x;
         if (id.x < RowIDSum) {
             // Do stuff
             _Resolution = _CubemapData[cubeID].x;
             _FovPaddingPx = _CubemapData[cubeID].y;
             _CubeIndex = cubeID;
 
-            InUse = true;
             break;
         }
     }
 
-    if (!InUse) {
-        return;
-    }
-
     uint face = id.z;
     uint faceIndex = 6 * _CubeIndex;
-    uint x = (id.x - (RowIDSum - (_Resolution / (uint)COL_PER_THREAD))) * COL_PER_THREAD; // Completely goddamn incomprehensible. But whatever. The things I do for performance...
+    uint x = id.x - (RowIDSum - _Resolution);
 
     float2 FaceOffset = _CubeSliceOffsets[face + faceIndex];
-    //float2 Accumulator = float2(0, 0);
-
-    float2 Accumulator[COL_PER_THREAD] = { float2(0, 0), float2(0, 0), float2(0, 0), float2(0, 0) };
+    float2 Accumulator = float2(0, 0);
 
     float per_Texel = 1 / float(2 * _Radius + 1);
 
     
     // Accumulate last part of trailing face
     for (int y = _Resolution - _Radius; y < _Resolution; y++) {
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            Accumulator[i] += _InputBuffer[TrailingFace(y - (_FovPaddingPx * 2), x + i, face, faceIndex, _Resolution)];
-        }
-        
+        Accumulator += _InputBuffer[TrailingFace(y - (_FovPaddingPx * 2), x, face, faceIndex, _Resolution)];
     }
 
     // Accumulate first part of current face
     for (int y = 0; y < _Radius; y++) {
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            Accumulator[i] += _InputBuffer[uint2(x + i, y) + FaceOffset];
-        }
+        Accumulator += _InputBuffer[uint2(x, y) + FaceOffset];
     }
 
     // Blur first part of face, accounting for trailing face
     for (int y = 0; y < _Radius; y++) {
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            Accumulator[i] += _InputBuffer[uint2(x + i, y + _Radius) + FaceOffset];
-        }
-
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            _OutputBuffer[uint2(x + i, y) + FaceOffset] = Accumulator[i] * per_Texel;
-            //_OutputBuffer[uint2(x + i, y) + FaceOffset] = float2(x + i, y);
-        }
-
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            Accumulator[i] -= _InputBuffer[TrailingFace((_Resolution - _Radius - (_FovPaddingPx * 2)) + y, x + i, face, faceIndex, _Resolution)];
-        }
-        
+        Accumulator += _InputBuffer[uint2(x, y + _Radius) + FaceOffset];
+        _OutputBuffer[uint2(x, y) + FaceOffset] = Accumulator * per_Texel;
+        Accumulator -= _InputBuffer[TrailingFace((_Resolution - _Radius - (_FovPaddingPx * 2)) + y, x, face, faceIndex, _Resolution)];
     }
 
     // Blur main part of face
     for (int y = _Radius; y < _Resolution - _Radius; y++) {
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            Accumulator[i] += _InputBuffer[uint2(x + i, y + _Radius) + FaceOffset];
-        }
-        
-
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            _OutputBuffer[uint2(x + i, y) + FaceOffset] = Accumulator[i] * per_Texel;
-        }
-        
-        
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            Accumulator[i] -= _InputBuffer[uint2(x + i, y - _Radius) + FaceOffset];
-        }
+        Accumulator += _InputBuffer[uint2(x, y + _Radius) + FaceOffset];
+        _OutputBuffer[uint2(x, y) + FaceOffset] = Accumulator * per_Texel;
+        //_OutputBuffer[uint2(x, y) + FaceOffset] = float2(0,0);
+        Accumulator -= _InputBuffer[uint2(x, y - _Radius) + FaceOffset];
     }
 
     // Blur over into leading face
     for (int y = _Resolution - _Radius; y < _Resolution; y++) {
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            Accumulator[i] += _InputBuffer[LeadingFace((y + _Radius) - _Resolution + (_FovPaddingPx * 2), x + i, face, faceIndex, _Resolution)];
-        }
-        
-
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            _OutputBuffer[uint2(x + i, y) + FaceOffset] = Accumulator[i] * per_Texel;
-        }
-        
-
-        UNITY_UNROLL
-        for (int i = 0; i < 4; i++) {
-            Accumulator[i] -= _InputBuffer[uint2(x + i, y - _Radius) + FaceOffset];
-        }
+        Accumulator += _InputBuffer[LeadingFace((y + _Radius) - _Resolution + (_FovPaddingPx * 2), x, face, faceIndex, _Resolution)];
+        _OutputBuffer[uint2(x, y) + FaceOffset] = Accumulator * per_Texel;
+        Accumulator -= _InputBuffer[uint2(x, y - _Radius) + FaceOffset];
     }
 }
