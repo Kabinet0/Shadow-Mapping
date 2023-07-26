@@ -17,7 +17,7 @@ MonoBehaviour:
   cubemapBlurX: {fileID: 7200000, guid: 388b0fd442f849744843cb37654e6bb5, type: 3}
   cubemapBlurY: {fileID: 7200000, guid: b85720eaddda70b4bac31fbd96087379, type: 3}
   Quality:
-    BlurRadius: 10
+    BlurRadius: 18
 --- !u!114 &-1878332245247344467
 MonoBehaviour:
   m_ObjectHideFlags: 0
