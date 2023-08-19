@@ -3,6 +3,9 @@
 // Suppress annoying warning
 #pragma warning (disable : 3078)
 
+#pragma use_dxc
+#pragma enable_d3d11_debug_symbols
+
 // Each #kernel tells which function to compile; you can have many kernels
 #pragma kernel CubemapBlurX
 

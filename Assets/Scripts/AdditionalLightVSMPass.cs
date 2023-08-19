@@ -272,11 +272,9 @@ public class AdditionalVSMRenderPass : ScriptableRenderPass
 
                     /*    Dispatch Compute Shaders    */
                     /*  Covers all faces in one pass  */
-                    cmd.DispatchCompute(_CubemapBlurY, kernelHandleY, SummedPointResolutions / 64, 1, 6); // Y blur
                     cmd.DispatchCompute(_CubemapBlurX, kernelHandleX, 1, SummedPointResolutions / 64, 6); // X blur 
-                    
+                    cmd.DispatchCompute(_CubemapBlurY, kernelHandleY, SummedPointResolutions / 64, 1, 6); // Y blur
                 }
-
 
 
 
